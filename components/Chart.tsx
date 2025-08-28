@@ -25,6 +25,8 @@ export default function Chart({ data, settings, onCrosshairChange }: ChartProps)
   useEffect(() => {
     if (!isClient || !chartRef.current) return;
 
+  console.debug('[Chart] initializing (isClient, data.length):', isClient, data?.length);
+
     const isDark = theme === 'dark';
     const gridColor = isDark ? '#ffffff1a' : '#0000001a';
     const textColor = isDark ? '#8b949e' : '#6b7280';
@@ -70,16 +72,15 @@ export default function Chart({ data, settings, onCrosshairChange }: ChartProps)
             borderRadius: 4,
             borderSize: 1,
             borderColor: '#3f4254',
-          }
+          },
           borderColor: borderColor,
-          color: backgroundColor
+          color: backgroundColor,
           text: {
             size: 12,
             family: 'Roboto',
             weight: 'normal',
-            color: '#d1d4dc'
-          }
-          color: textColor
+            color: textColor,
+          },
         }
       },
       xAxis: {
@@ -137,9 +138,126 @@ export default function Chart({ data, settings, onCrosshairChange }: ChartProps)
       chartInstance.current.subscribeAction('crosshairChange', onCrosshairChange);
     }
 
+    // If data was already loaded before chart init, apply it now
+    if (data && data.length) {
+      console.debug('[Chart] applying initial data, points:', data.length);
+      // Apply data and overlays
+      const chartData = data.map(item => ({
+        timestamp: item.timestamp,
+        open: item.open,
+        high: item.high,
+        low: item.low,
+        close: item.close,
+        volume: item.volume,
+      }));
+
+      chartInstance.current.applyNewData(chartData);
+
+  console.debug('[Chart] applied initial data to chart');
+
+      const bollingerData = computeBollingerBands(data, settings);
+      const indicatorData = bollingerData.map(item => ({
+        timestamp: item.timestamp,
+        upper: item.upper,
+        middle: item.middle,
+        lower: item.lower,
+      }));
+
+      chartInstance.current.removeOverlay();
+      if (bollingerData.length > 0) {
+        chartInstance.current.createOverlay({
+          name: 'bollinger',
+          totalStep: 1,
+          needDefaultPointFigure: true,
+          needDefaultXAxisFigure: true,
+          needDefaultYAxisFigure: true,
+          mode: 'normal',
+          modeSensitivity: 8,
+          points: indicatorData,
+          draw: ({ ctx, barSpace, visibleRange }: any) => {
+            const { from, to } = visibleRange;
+            ctx.save();
+            for (let i = from; i < to; i++) {
+              const dataPoint = indicatorData[i];
+              if (!dataPoint) continue;
+              const x = barSpace.bar * (i + 0.5);
+              const upperY = barSpace.convertToPixel(dataPoint.upper);
+              const middleY = barSpace.convertToPixel(dataPoint.middle);
+              const lowerY = barSpace.convertToPixel(dataPoint.lower);
+
+              if (settings.backgroundFill.show && i < to - 1) {
+                const nextData = indicatorData[i + 1];
+                if (nextData) {
+                  const nextX = barSpace.bar * (i + 1.5);
+                  const nextUpperY = barSpace.convertToPixel(nextData.upper);
+                  const nextLowerY = barSpace.convertToPixel(nextData.lower);
+
+                  ctx.fillStyle = `${settings.backgroundFill.color}${Math.round(settings.backgroundFill.opacity * 255).toString(16).padStart(2, '0')}`;
+                  ctx.beginPath();
+                  ctx.moveTo(x, upperY);
+                  ctx.lineTo(nextX, nextUpperY);
+                  ctx.lineTo(nextX, nextLowerY);
+                  ctx.lineTo(x, lowerY);
+                  ctx.closePath();
+                  ctx.fill();
+                }
+              }
+
+              if (settings.upperBand.show && i < to - 1) {
+                const nextData = indicatorData[i + 1];
+                if (nextData) {
+                  const nextX = barSpace.bar * (i + 1.5);
+                  const nextUpperY = barSpace.convertToPixel(nextData.upper);
+                  ctx.strokeStyle = settings.upperBand.color;
+                  ctx.lineWidth = settings.upperBand.lineWidth;
+                  ctx.setLineDash(settings.upperBand.lineStyle === 'dashed' ? [5, 5] : []);
+                  ctx.beginPath();
+                  ctx.moveTo(x, upperY);
+                  ctx.lineTo(nextX, nextUpperY);
+                  ctx.stroke();
+                }
+              }
+
+              if (settings.middleBand.show && i < to - 1) {
+                const nextData = indicatorData[i + 1];
+                if (nextData) {
+                  const nextX = barSpace.bar * (i + 1.5);
+                  const nextMiddleY = barSpace.convertToPixel(nextData.middle);
+                  ctx.strokeStyle = settings.middleBand.color;
+                  ctx.lineWidth = settings.middleBand.lineWidth;
+                  ctx.setLineDash(settings.middleBand.lineStyle === 'dashed' ? [5, 5] : []);
+                  ctx.beginPath();
+                  ctx.moveTo(x, middleY);
+                  ctx.lineTo(nextX, nextMiddleY);
+                  ctx.stroke();
+                }
+              }
+
+              if (settings.lowerBand.show && i < to - 1) {
+                const nextData = indicatorData[i + 1];
+                if (nextData) {
+                  const nextX = barSpace.bar * (i + 1.5);
+                  const nextLowerY = barSpace.convertToPixel(nextData.lower);
+                  ctx.strokeStyle = settings.lowerBand.color;
+                  ctx.lineWidth = settings.lowerBand.lineWidth;
+                  ctx.setLineDash(settings.lowerBand.lineStyle === 'dashed' ? [5, 5] : []);
+                  ctx.beginPath();
+                  ctx.moveTo(x, lowerY);
+                  ctx.lineTo(nextX, nextLowerY);
+                  ctx.stroke();
+                }
+              }
+            }
+            ctx.restore();
+            return true;
+          }
+        });
+      }
+    }
+
     return () => {
       if (chartInstance.current) {
-        dispose(chartRef.current);
+        if (chartRef.current) dispose(chartRef.current);
         chartInstance.current = null;
       }
     };
